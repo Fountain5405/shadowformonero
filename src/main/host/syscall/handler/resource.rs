@@ -35,4 +35,78 @@ impl SyscallHandler {
             Err(Errno::EOPNOTSUPP.into())
         }
     }
+
+    log_syscall!(
+        setpriority,
+        /* rv */ std::ffi::c_int,
+        /* which */ std::ffi::c_int,
+        /* who */ std::ffi::c_int,
+        /* prio */ std::ffi::c_int,
+    );
+    pub fn setpriority(
+        _ctx: &mut SyscallContext,
+        which: std::ffi::c_int,
+        who: std::ffi::c_int,
+        prio: std::ffi::c_int,
+    ) -> Result<(), SyscallError> {
+        log::trace!("setpriority called with which={}, who={}, prio={}", which, who, prio);
+        
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would set the process/thread priority
+        Ok(())
+    }
+
+    log_syscall!(
+        mlock,
+        /* rv */ std::ffi::c_int,
+        /* addr */ *const std::ffi::c_void,
+        /* len */ std::ffi::c_ulong,
+    );
+    pub fn mlock(
+        _ctx: &mut SyscallContext,
+        addr: ForeignPtr<()>,
+        len: std::ffi::c_ulong,
+    ) -> Result<(), SyscallError> {
+        log::trace!("mlock called with addr={:?}, len={}", addr, len);
+        
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would lock the memory pages
+        Ok(())
+    }
+
+    log_syscall!(
+        mlockall,
+        /* rv */ std::ffi::c_int,
+        /* flags */ std::ffi::c_int,
+    );
+    pub fn mlockall(
+        _ctx: &mut SyscallContext,
+        flags: std::ffi::c_int,
+    ) -> Result<(), SyscallError> {
+        log::trace!("mlockall called with flags={}", flags);
+        
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would lock all memory pages
+        Ok(())
+    }
+
+    log_syscall!(
+        mlock2,
+        /* rv */ std::ffi::c_int,
+        /* addr */ *const std::ffi::c_void,
+        /* len */ std::ffi::c_ulong,
+        /* flags */ std::ffi::c_int,
+    );
+    pub fn mlock2(
+        _ctx: &mut SyscallContext,
+        addr: ForeignPtr<()>,
+        len: std::ffi::c_ulong,
+        flags: std::ffi::c_int,
+    ) -> Result<(), SyscallError> {
+        log::trace!("mlock2 called with addr={:?}, len={}, flags={}", addr, len, flags);
+        
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would lock the memory pages with flags
+        Ok(())
+    }
 }

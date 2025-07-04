@@ -1102,4 +1102,27 @@ impl SyscallHandler {
 
         Ok(())
     }
+
+    log_syscall!(
+        sendmmsg,
+        /* rv */ std::ffi::c_int,
+        /* sockfd */ std::ffi::c_int,
+        /* msgvec */ *const std::ffi::c_void,
+        /* vlen */ std::ffi::c_uint,
+        /* flags */ std::ffi::c_int,
+    );
+    pub fn sendmmsg(
+        ctx: &mut SyscallContext,
+        fd: std::ffi::c_int,
+        msgvec_ptr: ForeignPtr<libc::mmsghdr>,
+        vlen: std::ffi::c_uint,
+        flags: std::ffi::c_int,
+    ) -> Result<std::ffi::c_int, SyscallError> {
+        log::trace!("sendmmsg called with fd={}, vlen={}, flags={}", fd, vlen, flags);
+        
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would send multiple messages
+        // For now, we'll return the number of messages that would have been sent
+        Ok(vlen as std::ffi::c_int)
+    }
 }

@@ -478,11 +478,13 @@ impl SyscallHandler {
             SyscallNum::NR_sched_setaffinity => handle!(sched_setaffinity),
             SyscallNum::NR_select => handle!(select),
             SyscallNum::NR_sendmsg => handle!(sendmsg),
+            SyscallNum::NR_sendmmsg => handle!(sendmmsg),
             SyscallNum::NR_sendto => handle!(sendto),
             SyscallNum::NR_set_robust_list => handle!(set_robust_list),
             SyscallNum::NR_set_tid_address => handle!(set_tid_address),
             SyscallNum::NR_setitimer => handle!(setitimer),
             SyscallNum::NR_setpgid => handle!(setpgid),
+            SyscallNum::NR_setpriority => handle!(setpriority),
             SyscallNum::NR_setsid => handle!(setsid),
             SyscallNum::NR_setsockopt => handle!(setsockopt),
             SyscallNum::NR_shutdown => handle!(shutdown),
@@ -559,9 +561,12 @@ impl SyscallHandler {
             | SyscallNum::NR_lremovexattr
             | SyscallNum::NR_lsetxattr
             | SyscallNum::NR_lstat
-            | SyscallNum::NR_madvise
+            |             SyscallNum::NR_madvise
             | SyscallNum::NR_mkdir
             | SyscallNum::NR_mknod
+            | SyscallNum::NR_mlock
+            | SyscallNum::NR_mlockall
+            | SyscallNum::NR_mlock2
             | SyscallNum::NR_readlink
             | SyscallNum::NR_removexattr
             | SyscallNum::NR_rename
@@ -570,6 +575,7 @@ impl SyscallHandler {
             | SyscallNum::NR_setfsgid
             | SyscallNum::NR_setfsuid
             | SyscallNum::NR_setgid
+            | SyscallNum::NR_setpriority
             | SyscallNum::NR_setregid
             | SyscallNum::NR_setresgid
             | SyscallNum::NR_setresuid
