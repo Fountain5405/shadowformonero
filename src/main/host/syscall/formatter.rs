@@ -118,6 +118,17 @@ impl SyscallDisplay for SyscallVal<'_, NoArg> {
     }
 }
 
+impl SyscallDisplay for SyscallVal<'_, *mut u32> {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        _options: FmtOptions,
+        _mem: &MemoryManager,
+    ) -> std::fmt::Result {
+        write!(f, "{:?}", self.reg.as_mut_u32_ptr())
+    }
+}
+
 /// A formatting wrapper for six syscall arguments.
 pub struct SyscallArgsFmt<'a, A = NoArg, B = NoArg, C = NoArg, D = NoArg, E = NoArg, F = NoArg> {
     a: SyscallVal<'a, A>,

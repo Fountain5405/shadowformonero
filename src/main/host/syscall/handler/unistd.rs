@@ -696,6 +696,63 @@ impl SyscallHandler {
         Ok(pid.into())
     }
 
+    log_syscall!(
+        getgroups,
+        /* rv */ std::ffi::c_int,
+        /* size */ std::ffi::c_int,
+        /* list */ *const linux_api::types::gid_t
+    );
+    pub fn getgroups(
+        ctx: &mut SyscallContext,
+        size: std::ffi::c_int,
+        list_ptr: ForeignPtr<linux_api::types::gid_t>,
+    ) -> Result<std::ffi::c_int, SyscallError> {
+        let groups = ctx.objs.process.getgroups()?;
+
+        if size > 0 {
+            if size < groups.len() as i32 {
+                return Err(Errno::EINVAL.into());
+            }
+
+            let group_slice = &groups[..std::cmp::min(size as usize, groups.len())];
+
+            ctx.objs
+                .process
+                .memory_borrow_mut()
+                .copy_to_ptr(ForeignArrayPtr::new(list_ptr.cast::<u32>(), group_slice.len()), group_slice)?;
+        }
+
+        Ok(groups.len() as i32)
+    }
+
+    log_syscall!(
+        setgroups,
+        /* rv */ std::ffi::c_int,
+        /* size */ std::ffi::c_int,
+        /* list */ *const linux_api::types::gid_t
+    );
+    pub fn setgroups(
+        ctx: &mut SyscallContext,
+        size: std::ffi::c_int,
+        list_ptr: ForeignPtr<linux_api::types::gid_t>,
+    ) -> Result<(), SyscallError> {
+        let size: usize = size.try_into().map_err(|_| Errno::EINVAL)?;
+
+        if size > 0 {
+            let mut groups = Vec::with_capacity(size);
+            unsafe { groups.set_len(size) };
+            ctx.objs
+                .process
+                .memory_borrow()
+                .copy_from_ptr(&mut groups, ForeignArrayPtr::new(list_ptr.cast::<u32>(), size))?;
+            ctx.objs.process.setgroups(&groups)?;
+        } else {
+            ctx.objs.process.setgroups(&[])?;
+        }
+
+        Ok(())
+    }
+
     fn execve_common(
         ctx: &mut SyscallContext,
         base_dir: &CStr,
@@ -986,6 +1043,32 @@ impl SyscallHandler {
         newcwd.push(0);
         let newcwd = CString::from_vec_with_nul(newcwd).unwrap();
         process.process.set_current_working_dir(newcwd);
+        Ok(())
+    }
+
+    log_syscall!(
+        setfsuid,
+        /* rv */ std::ffi::c_int,
+        /* fsuid */ linux_api::types::uid_t
+    );
+    pub fn setfsuid(
+        _ctx: &mut SyscallContext,
+        _fsuid: linux_api::types::uid_t,
+    ) -> Result<(), SyscallError> {
+        // success always for now
+        Ok(())
+    }
+
+    log_syscall!(
+        setfsgid,
+        /* rv */ std::ffi::c_int,
+        /* fsgid */ linux_api::types::gid_t
+    );
+    pub fn setfsgid(
+        _ctx: &mut SyscallContext,
+        _fsgid: linux_api::types::gid_t,
+    ) -> Result<(), SyscallError> {
+        // success always for now
         Ok(())
     }
 }

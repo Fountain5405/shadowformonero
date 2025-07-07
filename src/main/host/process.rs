@@ -55,6 +55,17 @@ use crate::utility::callback_queue::CallbackQueue;
 use crate::utility::perf_timer::PerfTimer;
 use crate::utility::{self, debug_assert_cloexec};
 
+#[derive(Debug, Default, Clone)]
+struct ProcessCred {
+    rgid: u32,
+    egid: u32,
+    sgid: u32,
+    ruid: u32,
+    euid: u32,
+    suid: u32,
+    groups: Vec<u32>,
+}
+
 /// Virtual pid of a shadow process
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Ord, PartialOrd)]
 pub struct ProcessId(u32);
@@ -164,6 +175,8 @@ struct Common {
     // This must remain in sync with the actual working dir of the native process.
     // See https://github.com/shadow/shadow/issues/2960
     working_dir: CString,
+
+    cred: RefCell<ProcessCred>,
 }
 
 impl Common {
@@ -622,6 +635,7 @@ impl RunnableProcess {
             group_id: Cell::new(process_group_id),
             session_id: Cell::new(session_id),
             exit_signal,
+            cred: RefCell::new(ProcessCred::default()),
         };
 
         // The child will log to the same strace log file. Entries contain thread IDs,
@@ -1092,6 +1106,7 @@ impl Process {
             // Exit signal is moot; since parent is INIT there will never
             // be a valid target for it.
             exit_signal: None,
+            cred: RefCell::new(ProcessCred::default()),
         };
         Ok(RootedRc::new(
             host.root(),
@@ -1123,7 +1138,32 @@ impl Process {
     }
 
     pub fn id(&self) -> ProcessId {
-        self.common().id
+        self.common().id()
+    }
+
+    pub fn getresgid(&self) -> Result<(u32, u32, u32), Errno> {
+        let common = self.common();
+        let cred = common.cred.borrow();
+        Ok((cred.rgid, cred.egid, cred.sgid))
+    }
+
+    pub fn getresuid(&self) -> Result<(u32, u32, u32), Errno> {
+        let common = self.common();
+        let cred = common.cred.borrow();
+        Ok((cred.ruid, cred.euid, cred.suid))
+    }
+
+    pub fn getgroups(&self) -> Result<Vec<u32>, Errno> {
+        let common = self.common();
+        let cred = common.cred.borrow();
+        Ok(cred.groups.clone())
+    }
+
+    pub fn setgroups(&self, groups: &[u32]) -> Result<(), Errno> {
+        let common = self.common();
+        let mut cred = common.cred.borrow_mut();
+        cred.groups = groups.to_vec();
+        Ok(())
     }
 
     pub fn parent_id(&self) -> ProcessId {
