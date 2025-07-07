@@ -425,6 +425,12 @@ impl core::fmt::Debug for SyscallReg {
     }
 }
 
+impl SyscallReg {
+    pub fn as_mut_u32_ptr(&self) -> *mut u32 {
+        unsafe { self.as_ptr.into_raw_mut() as *mut u32 }
+    }
+}
+
 // implement conversions from `SyscallReg`
 
 impl From<SyscallReg> for linux_api::sched::CloneFlags {
