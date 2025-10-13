@@ -24,6 +24,19 @@
 #include "lib/shim/shim_api.h"
 #include "lib/shim/shim_sys.h"
 
+// Startup message for shadowformonero version
+static void shadowformonero_startup_message() {
+    // Get current git commit hash
+    const char* git_commit = "unknown";
+#ifdef GIT_COMMIT_HASH
+    git_commit = GIT_COMMIT_HASH;
+#endif
+    
+    // Log startup message
+    info("running shadowformonero at commit %s", git_commit);
+    info("fast-path localhost RPC optimization enabled");
+}
+
 // Syscall numbers for socket operations
 #define SYS_SOCKET 41
 #define SYS_CONNECT 42
@@ -106,6 +119,13 @@ static CEmulatedTime _shim_sys_get_time() {
 }
 
 uint64_t shim_sys_get_simtime_nanos() {
+    // Call startup message on first invocation
+    static bool startup_called = false;
+    if (!startup_called) {
+        shadowformonero_startup_message();
+        startup_called = true;
+    }
+    
     return emutime_sub_emutime(_shim_sys_get_time(), EMUTIME_SIMULATION_START) /
            SIMTIME_ONE_NANOSECOND;
 }
