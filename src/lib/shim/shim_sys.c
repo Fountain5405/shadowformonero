@@ -25,16 +25,17 @@
 #include "lib/shim/shim_sys.h"
 
 // Startup message for shadowformonero version
-static void shadowformonero_startup_message() {
+static void shadowformonero_startup_message() //nolog
+{
     // Get current git commit hash
     const char* git_commit = "unknown";
 #ifdef GIT_COMMIT_HASH
     git_commit = GIT_COMMIT_HASH;
 #endif
-    
+
     // Log startup message
-    info("running shadowformonero at commit %s", git_commit);
-    info("fast-path localhost RPC optimization enabled");
+    fprintf(stdout, "running shadowformonero at commit %s\n", git_commit);
+    fprintf(stdout, "fast-path localhost RPC optimization enabled\n");
 }
 
 // Syscall numbers for socket operations
@@ -57,51 +58,9 @@ static bool is_localhost_addr(const struct sockaddr* addr) {
         case AF_INET6: {
             const struct sockaddr_in6* in6_addr = (const struct sockaddr_in6*)addr;
             // Check for ::1 (IPv6 localhost)
-            return memcmp(&in6_addr->sin6_addr, &in6_addr->sin6_addr, 16) == 0 &&
-                   in6_addr->sin6_addr.s6_addr[15] == 1;
+            struct in6_addr localhost = IN6ADDR_LOOPBACK_INIT;
+            return memcmp(&in6_addr->sin6_addr, &localhost, sizeof(struct in6_addr)) == 0;
         }
-        default:
-            return false;
-    }
-}
-
-// Helper function to handle localhost fast-path for socket operations
-static bool handle_localhost_fastpath(long syscall_num, va_list args, long* rv) {
-    trace("Handling localhost fast-path for syscall %ld", syscall_num);
-    
-    switch (syscall_num) {
-        case SYS_SOCKET: {
-            int domain = va_arg(args, int);
-            int type = va_arg(args, int);
-            int protocol = va_arg(args, int);
-            
-            trace("Fast-path socket creation: domain=%d, type=%d, protocol=%d", domain, type, protocol);
-            
-            // Create socket directly without Shadow network simulation
-            int fd = socket(domain, type, protocol);
-            if (fd < 0) {
-                *rv = -1;
-                return true;
-            }
-            
-            trace("Fast-path socket created successfully: fd=%d", fd);
-            *rv = fd;
-            return true;
-        }
-        
-        case SYS_CONNECT: {
-            int sockfd = va_arg(args, int);
-            const struct sockaddr* addr = va_arg(args, const struct sockaddr*);
-            socklen_t addrlen = va_arg(args, socklen_t);
-            
-            trace("Fast-path connect: sockfd=%d, addrlen=%d", sockfd, addrlen);
-            
-            // Connect directly without Shadow network simulation
-            int result = connect(sockfd, addr, addrlen);
-            *rv = result;
-            return true;
-        }
-        
         default:
             return false;
     }
@@ -159,21 +118,48 @@ bool shim_sys_handle_syscall_locally(long syscall_num, long* rv, va_list args) {
 
     char* syscallName = "<unknown>";
 
-    // Fast-path localhost RPC optimization
-    if (syscall_num == SYS_SOCKET || syscall_num == SYS_CONNECT) {
-        // Extract address parameter for connect syscall
-        const struct sockaddr* addr = NULL;
-        if (syscall_num == SYS_CONNECT) {
-            addr = va_arg(args, const struct sockaddr*);
-        }
-        
-        if (addr == NULL || is_localhost_addr(addr)) {
-            trace("Fast-path localhost bypass for syscall %ld", syscall_num);
-            return handle_localhost_fastpath(syscall_num, args, rv);
-        }
-    }
-
     switch (syscall_num) {
+        case SYS_CONNECT: {
+            syscallName = "connect";
+            int sockfd = va_arg(args, int);
+            const struct sockaddr* addr = va_arg(args, const struct sockaddr*);
+            socklen_t addrlen = va_arg(args, socklen_t);
+            
+            // Only use fast-path for localhost connections
+            if (is_localhost_addr(addr)) {
+                trace("Fast-path localhost connect: sockfd=%d", sockfd);
+                int result;
+                const int max_retries = 5;
+                const int retry_delay_ms = 10;
+                for (int i = 0; i < max_retries; i++) {
+                    result = connect(sockfd, addr, addrlen);
+                    if (result == 0) {
+                        break; // Success
+                    }
+                    if (errno != ECONNREFUSED) {
+                        break; // Different error, don't retry
+                    }
+                    if (i < max_retries - 1) {
+                        trace("Connect failed with ECONNREFUSED, retrying in %d ms...", retry_delay_ms);
+                        // Sleep for a short duration before retrying
+                        struct timespec ts = { .tv_sec = 0, .tv_nsec = retry_delay_ms * 1000000L };
+                        nanosleep(&ts, NULL);
+                    }
+                }
+
+                if (result < 0) {
+                    *rv = -errno;
+                    warning("Fast-path connect failed: %s", strerror(errno));
+                } else {
+                    *rv = result;
+                }
+            } else {
+                // Not localhost, let Shadow handle it normally
+                return false;
+            }
+            break;
+        }
+
         case SYS_clock_gettime: {
             syscallName = "clock_gettime";
 
