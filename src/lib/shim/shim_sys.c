@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/param.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <time.h>
@@ -20,6 +23,76 @@
 #include "lib/shim/shim.h"
 #include "lib/shim/shim_api.h"
 #include "lib/shim/shim_sys.h"
+
+// Syscall numbers for socket operations
+#define SYS_SOCKET 41
+#define SYS_CONNECT 42
+
+// Helper function to check if an address is localhost
+static bool is_localhost_addr(const struct sockaddr* addr) {
+    if (addr == NULL) {
+        return false;
+    }
+    
+    switch (addr->sa_family) {
+        case AF_INET: {
+            const struct sockaddr_in* in_addr = (const struct sockaddr_in*)addr;
+            uint32_t ip = ntohl(in_addr->sin_addr.s_addr);
+            // Check for 127.0.0.0/8 (localhost range)
+            return (ip & 0xFF000000) == 0x7F000000;
+        }
+        case AF_INET6: {
+            const struct sockaddr_in6* in6_addr = (const struct sockaddr_in6*)addr;
+            // Check for ::1 (IPv6 localhost)
+            return memcmp(&in6_addr->sin6_addr, &in6_addr->sin6_addr, 16) == 0 &&
+                   in6_addr->sin6_addr.s6_addr[15] == 1;
+        }
+        default:
+            return false;
+    }
+}
+
+// Helper function to handle localhost fast-path for socket operations
+static bool handle_localhost_fastpath(long syscall_num, va_list args, long* rv) {
+    trace("Handling localhost fast-path for syscall %ld", syscall_num);
+    
+    switch (syscall_num) {
+        case SYS_SOCKET: {
+            int domain = va_arg(args, int);
+            int type = va_arg(args, int);
+            int protocol = va_arg(args, int);
+            
+            trace("Fast-path socket creation: domain=%d, type=%d, protocol=%d", domain, type, protocol);
+            
+            // Create socket directly without Shadow network simulation
+            int fd = socket(domain, type, protocol);
+            if (fd < 0) {
+                *rv = -1;
+                return true;
+            }
+            
+            trace("Fast-path socket created successfully: fd=%d", fd);
+            *rv = fd;
+            return true;
+        }
+        
+        case SYS_CONNECT: {
+            int sockfd = va_arg(args, int);
+            const struct sockaddr* addr = va_arg(args, const struct sockaddr*);
+            socklen_t addrlen = va_arg(args, socklen_t);
+            
+            trace("Fast-path connect: sockfd=%d, addrlen=%d", sockfd, addrlen);
+            
+            // Connect directly without Shadow network simulation
+            int result = connect(sockfd, addr, addrlen);
+            *rv = result;
+            return true;
+        }
+        
+        default:
+            return false;
+    }
+}
 
 static CEmulatedTime _shim_sys_get_time() {
     const ShimShmemHost* mem = shim_hostSharedMem();
@@ -65,6 +138,20 @@ bool shim_sys_handle_syscall_locally(long syscall_num, long* rv, va_list args) {
     // anything too expensive outside of the switch cases.
 
     char* syscallName = "<unknown>";
+
+    // Fast-path localhost RPC optimization
+    if (syscall_num == SYS_SOCKET || syscall_num == SYS_CONNECT) {
+        // Extract address parameter for connect syscall
+        const struct sockaddr* addr = NULL;
+        if (syscall_num == SYS_CONNECT) {
+            addr = va_arg(args, const struct sockaddr*);
+        }
+        
+        if (addr == NULL || is_localhost_addr(addr)) {
+            trace("Fast-path localhost bypass for syscall %ld", syscall_num);
+            return handle_localhost_fastpath(syscall_num, args, rv);
+        }
+    }
 
     switch (syscall_num) {
         case SYS_clock_gettime: {
