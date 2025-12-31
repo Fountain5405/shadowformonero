@@ -96,7 +96,10 @@ fn die_with_fatal_signal(sig: Signal) -> ! {
     let pid = rustix::process::getpid();
     rustix::process::kill_process(pid, rustix::process::Signal::from_raw(sig.into()).unwrap())
         .unwrap();
-    unreachable!()
+    // In Shadow simulation environment, processes may not actually terminate
+    // when killed, so we cannot assume unreachable!() is appropriate.
+    // Use _exit() which is async-signal-safe (std::thread::sleep is not).
+    unsafe { libc::_exit(128 + sig.as_i32()) };
 }
 
 /// Handle pending unblocked signals, and return whether *all* corresponding
