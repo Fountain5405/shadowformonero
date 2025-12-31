@@ -989,6 +989,11 @@ impl UdpSocket {
                     );
                 }
             }
+            (libc::IPPROTO_IP, libc::IP_TOS) => {
+                // IP_TOS sets the Type of Service field in IP headers for QoS.
+                // Shadow doesn't implement QoS, so we ignore this option.
+                log::trace!("setsockopt IP_TOS ignored (Shadow does not implement QoS)");
+            }
             _ => {
                 log_once_per_value_at_level!(
                     (level, optname),
