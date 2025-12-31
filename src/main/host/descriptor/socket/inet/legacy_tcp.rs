@@ -1309,6 +1309,27 @@ impl LegacyTcpSocket {
                     );
                 }
             }
+            (libc::IPPROTO_IP, libc::IP_TOS) => {
+                // IP_TOS sets the Type of Service field in IP headers for QoS.
+                // Shadow doesn't implement QoS, so we ignore this option.
+                // Monerod (and other applications) set this for network priority.
+                log::trace!("setsockopt IP_TOS ignored (Shadow does not implement QoS)");
+            }
+            (libc::IPPROTO_IP, libc::IP_BIND_ADDRESS_NO_PORT) => {
+                // IP_BIND_ADDRESS_NO_PORT allows binding without reserving a port.
+                // Shadow doesn't need this optimization, so ignore it.
+                log::trace!("setsockopt IP_BIND_ADDRESS_NO_PORT ignored");
+            }
+            (libc::SOL_TCP, libc::TCP_KEEPIDLE) => {
+                // TCP_KEEPIDLE sets the idle time before keepalives are sent.
+                // Shadow doesn't implement TCP keepalives, so ignore this.
+                log::trace!("setsockopt TCP_KEEPIDLE ignored (Shadow does not implement keepalives)");
+            }
+            (libc::SOL_TCP, libc::TCP_KEEPINTVL) => {
+                // TCP_KEEPINTVL sets the interval between keepalive probes.
+                // Shadow doesn't implement TCP keepalives, so ignore this.
+                log::trace!("setsockopt TCP_KEEPINTVL ignored (Shadow does not implement keepalives)");
+            }
             _ => {
                 log_once_per_value_at_level!(
                     (level, optname),
