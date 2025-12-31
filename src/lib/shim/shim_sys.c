@@ -24,19 +24,6 @@
 #include "lib/shim/shim_api.h"
 #include "lib/shim/shim_sys.h"
 
-// Startup message for shadowformonero version
-static void shadowformonero_startup_message() //nolog
-{
-    // Get current git commit hash
-    const char* git_commit = "unknown";
-#ifdef GIT_COMMIT_HASH
-    git_commit = GIT_COMMIT_HASH;
-#endif
-
-    // Log startup message
-    fprintf(stdout, "running shadowformonero at commit %s\n", git_commit);
-    fprintf(stdout, "fast-path localhost RPC optimization enabled\n");
-}
 
 // Syscall numbers for socket operations
 #define SYS_SOCKET 41
@@ -78,13 +65,6 @@ static CEmulatedTime _shim_sys_get_time() {
 }
 
 uint64_t shim_sys_get_simtime_nanos() {
-    // Call startup message on first invocation
-    static bool startup_called = false;
-    if (!startup_called) {
-        shadowformonero_startup_message();
-        startup_called = true;
-    }
-    
     return emutime_sub_emutime(_shim_sys_get_time(), EMUTIME_SIMULATION_START) /
            SIMTIME_ONE_NANOSECOND;
 }
@@ -119,46 +99,6 @@ bool shim_sys_handle_syscall_locally(long syscall_num, long* rv, va_list args) {
     char* syscallName = "<unknown>";
 
     switch (syscall_num) {
-        case SYS_CONNECT: {
-            syscallName = "connect";
-            int sockfd = va_arg(args, int);
-            const struct sockaddr* addr = va_arg(args, const struct sockaddr*);
-            socklen_t addrlen = va_arg(args, socklen_t);
-            
-            // Only use fast-path for localhost connections
-            if (is_localhost_addr(addr)) {
-                trace("Fast-path localhost connect: sockfd=%d", sockfd);
-                int result;
-                const int max_retries = 5;
-                const int retry_delay_ms = 10;
-                for (int i = 0; i < max_retries; i++) {
-                    result = connect(sockfd, addr, addrlen);
-                    if (result == 0) {
-                        break; // Success
-                    }
-                    if (errno != ECONNREFUSED) {
-                        break; // Different error, don't retry
-                    }
-                    if (i < max_retries - 1) {
-                        trace("Connect failed with ECONNREFUSED, retrying in %d ms...", retry_delay_ms);
-                        // Sleep for a short duration before retrying
-                        struct timespec ts = { .tv_sec = 0, .tv_nsec = retry_delay_ms * 1000000L };
-                        nanosleep(&ts, NULL);
-                    }
-                }
-
-                if (result < 0) {
-                    *rv = -errno;
-                    warning("Fast-path connect failed: %s", strerror(errno));
-                } else {
-                    *rv = result;
-                }
-            } else {
-                // Not localhost, let Shadow handle it normally
-                return false;
-            }
-            break;
-        }
 
         case SYS_clock_gettime: {
             syscallName = "clock_gettime";
