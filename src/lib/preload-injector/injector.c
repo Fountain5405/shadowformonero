@@ -32,7 +32,13 @@
 /// libraries are not preloaded.
 
 // A constructor is used to load the shim as soon as possible.
-__attribute__((constructor, used)) void _injector_load() {
+// Priority 101 is the lowest user-settable priority (GCC reserves 0-100).
+// When multiple constructors have the same priority, LD_PRELOAD order determines
+// execution order - libraries listed first in LD_PRELOAD run their constructors first.
+// Monerod's init_random() uses priority 101, so using the same priority here
+// combined with LD_PRELOAD ordering ensures Shadow's shim loads BEFORE monerod's
+// RNG initialization, allowing Shadow to intercept /dev/urandom reads.
+__attribute__((constructor(101), used)) void _injector_load() {
     // Make a call to the shim to ensure that it's loaded. The SYS_time syscall
     // will be handled locally in the shim, avoiding IPC with Shadow.
     shim_api_syscall(SYS_time, NULL);
