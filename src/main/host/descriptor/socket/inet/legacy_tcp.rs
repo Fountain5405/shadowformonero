@@ -1164,30 +1164,10 @@ impl LegacyTcpSocket {
     ) -> Result<(), SyscallError> {
         match (level, optname) {
             (libc::SOL_TCP, libc::TCP_NODELAY) => {
-                // Shadow doesn't support nagle's algorithm, so Shadow always behaves as if
-                // TCP_NODELAY is enabled. Some programs will fail if `setsockopt(fd, SOL_TCP,
-                // TCP_NODELAY, &1, sizeof(int))` returns an error, so we treat this as a no-op for
-                // compatibility.
-
-                type OptType = libc::c_int;
-
-                if usize::try_from(optlen).unwrap() < std::mem::size_of::<OptType>() {
-                    return Err(Errno::EINVAL.into());
-                }
-
-                let optval_ptr = optval_ptr.cast::<OptType>();
-                let enable = memory_manager.read(optval_ptr)?;
-
-                if enable != 0 {
-                    // wants to enable TCP_NODELAY
-                    log::debug!("Ignoring TCP_NODELAY");
-                } else {
-                    // wants to disable TCP_NODELAY
-                    log::warn!(
-                        "Cannot disable TCP_NODELAY since shadow does not implement Nagle's algorithm."
-                    );
-                    return Err(Errno::ENOPROTOOPT.into());
-                }
+                // Shadow doesn't support Nagle's algorithm, so Shadow always behaves as if
+                // TCP_NODELAY is enabled. Ignore both enable and disable requests for
+                // compatibility with applications like monerod that set no_delay{false}.
+                log::trace!("setsockopt TCP_NODELAY ignored (Shadow always uses no-delay)");
             }
             (libc::SOL_TCP, libc::TCP_CONGESTION) => {
                 // the value of TCP_CA_NAME_MAX in linux
