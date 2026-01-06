@@ -104,9 +104,61 @@ impl SyscallHandler {
         flags: std::ffi::c_int,
     ) -> Result<(), SyscallError> {
         log::trace!("mlock2 called with addr={:?}, len={}, flags={}", addr, len, flags);
-        
+
         // For simulation purposes, we'll just return success
         // In a real implementation, this would lock the memory pages with flags
+        Ok(())
+    }
+
+    log_syscall!(
+        munlock,
+        /* rv */ std::ffi::c_int,
+        /* addr */ *const std::ffi::c_void,
+        /* len */ std::ffi::c_ulong,
+    );
+    pub fn munlock(
+        _ctx: &mut SyscallContext,
+        addr: ForeignPtr<()>,
+        len: std::ffi::c_ulong,
+    ) -> Result<(), SyscallError> {
+        log::trace!("munlock called with addr={:?}, len={}", addr, len);
+
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would unlock the memory pages
+        Ok(())
+    }
+
+    log_syscall!(
+        munlockall,
+        /* rv */ std::ffi::c_int,
+    );
+    pub fn munlockall(
+        _ctx: &mut SyscallContext,
+    ) -> Result<(), SyscallError> {
+        log::trace!("munlockall called");
+
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would unlock all memory pages
+        Ok(())
+    }
+
+    log_syscall!(
+        msync,
+        /* rv */ std::ffi::c_int,
+        /* addr */ *const std::ffi::c_void,
+        /* len */ std::ffi::c_ulong,
+        /* flags */ std::ffi::c_int,
+    );
+    pub fn msync(
+        _ctx: &mut SyscallContext,
+        addr: ForeignPtr<()>,
+        len: std::ffi::c_ulong,
+        flags: std::ffi::c_int,
+    ) -> Result<(), SyscallError> {
+        log::trace!("msync called with addr={:?}, len={}, flags={}", addr, len, flags);
+
+        // For simulation purposes, we'll just return success
+        // In a real implementation, this would synchronize memory-mapped file
         Ok(())
     }
 
