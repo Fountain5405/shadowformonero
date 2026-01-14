@@ -81,6 +81,7 @@ pub struct HostParameters {
     pub use_new_tcp: bool,
     pub use_mem_mapper: bool,
     pub use_syscall_counters: bool,
+    pub dns_server: u32,
 }
 
 use super::cpu::Cpu;
@@ -238,6 +239,7 @@ impl Host {
             params.native_tsc_frequency,
             params.shim_log_level,
             manager_shmem,
+            params.dns_server,
         );
         let shim_shmem = UnsafeCell::new(shadow_shmem::allocator::shmalloc(host_shmem));
 
