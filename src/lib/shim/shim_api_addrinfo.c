@@ -24,6 +24,7 @@
 #include "lib/logger/logger.h"
 #include "lib/shim/shim.h"
 #include "lib/shim/shim_syscall.h"
+#include "lib/shadow-shim-helper-rs/shim_helper.h"
 
 // Sets `port` to the port specified by `service`, according to the criteria in
 // getaddrinfo(3). Returns 0 on success or the appropriate getaddrinfo error on
@@ -258,6 +259,226 @@ static bool _shim_api_hostname_to_addr_ipv4(const char* node, uint32_t* addr) {
     }
 }
 
+// DNS query constants (RFC 1035)
+#define DNS_PORT 53
+#define DNS_MAX_PACKET_SIZE 512
+#define DNS_HEADER_SIZE 12
+#define DNS_TYPE_A 1
+#define DNS_CLASS_IN 1
+#define DNS_FLAG_QR 0x8000      // Response flag
+#define DNS_FLAG_RCODE_MASK 0x000F
+
+// Build a DNS query packet for the given hostname.
+// Returns the packet size, or -1 on error.
+static int _build_dns_query(uint8_t* buf, size_t buf_size, const char* hostname, uint16_t query_id) {
+    if (strlen(hostname) > 253) {
+        return -1;  // Hostname too long
+    }
+
+    size_t offset = 0;
+
+    // DNS Header (12 bytes)
+    // ID (2 bytes)
+    buf[offset++] = (query_id >> 8) & 0xFF;
+    buf[offset++] = query_id & 0xFF;
+    // Flags (2 bytes): standard query, recursion desired
+    buf[offset++] = 0x01;  // RD=1
+    buf[offset++] = 0x00;
+    // QDCOUNT (2 bytes): 1 question
+    buf[offset++] = 0x00;
+    buf[offset++] = 0x01;
+    // ANCOUNT, NSCOUNT, ARCOUNT (6 bytes): all 0
+    for (int i = 0; i < 6; i++) {
+        buf[offset++] = 0x00;
+    }
+
+    // Question section: QNAME
+    // Convert hostname to DNS label format (e.g., "www.example.com" -> "\3www\7example\3com\0")
+    const char* ptr = hostname;
+    while (*ptr) {
+        const char* dot = strchr(ptr, '.');
+        size_t label_len = dot ? (size_t)(dot - ptr) : strlen(ptr);
+        if (label_len > 63 || label_len == 0) {
+            return -1;  // Invalid label
+        }
+        if (offset + label_len + 1 >= buf_size) {
+            return -1;  // Buffer too small
+        }
+        buf[offset++] = (uint8_t)label_len;
+        memcpy(&buf[offset], ptr, label_len);
+        offset += label_len;
+        ptr = dot ? dot + 1 : ptr + label_len;
+    }
+    buf[offset++] = 0x00;  // Null terminator for QNAME
+
+    // QTYPE (2 bytes): A record
+    buf[offset++] = 0x00;
+    buf[offset++] = DNS_TYPE_A;
+    // QCLASS (2 bytes): IN (Internet)
+    buf[offset++] = 0x00;
+    buf[offset++] = DNS_CLASS_IN;
+
+    return (int)offset;
+}
+
+// Parse a DNS name from the packet, handling compression pointers.
+// Returns the number of bytes consumed from the current position, or -1 on error.
+static int _skip_dns_name(const uint8_t* buf, size_t buf_size, size_t offset) {
+    int consumed = 0;
+    bool jumped = false;
+
+    while (offset < buf_size) {
+        uint8_t len = buf[offset];
+        if (len == 0) {
+            // End of name
+            if (!jumped) consumed++;
+            return consumed;
+        } else if ((len & 0xC0) == 0xC0) {
+            // Compression pointer (2 bytes)
+            if (!jumped) consumed += 2;
+            // Follow the pointer (but we're just skipping, so don't need to)
+            return consumed;
+        } else if ((len & 0xC0) == 0) {
+            // Regular label
+            if (!jumped) consumed += 1 + len;
+            offset += 1 + len;
+        } else {
+            return -1;  // Invalid label
+        }
+    }
+    return -1;  // Ran off end of buffer
+}
+
+// Perform a DNS query for A records and add results to the addrinfo list.
+// Returns the number of addresses added, or -1 on error.
+static int _getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo** tail,
+                                       const char* node, bool add_tcp, bool add_udp,
+                                       bool add_raw, in_port_t port, uint32_t dns_server_ip) {
+    if (dns_server_ip == 0) {
+        return 0;  // No DNS server configured
+    }
+
+    uint8_t query_buf[DNS_MAX_PACKET_SIZE];
+    uint8_t response_buf[DNS_MAX_PACKET_SIZE];
+
+    // Generate a simple query ID (doesn't need to be cryptographically random)
+    uint16_t query_id = (uint16_t)(((uintptr_t)node ^ (uintptr_t)head) & 0xFFFF);
+
+    // Build the DNS query
+    int query_len = _build_dns_query(query_buf, sizeof(query_buf), node, query_id);
+    if (query_len < 0) {
+        trace("Failed to build DNS query for %s", node);
+        return -1;
+    }
+
+    // Create UDP socket
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        trace("Failed to create UDP socket for DNS query: %s", strerror(errno));
+        return -1;
+    }
+
+    // Set socket timeout (2 seconds)
+    struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Send query to DNS server
+    struct sockaddr_in dns_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(DNS_PORT),
+        .sin_addr = {.s_addr = dns_server_ip}  // Already in network byte order
+    };
+
+    trace("Sending DNS query for %s to DNS server", node);
+    ssize_t sent = sendto(sock, query_buf, query_len, 0,
+                          (struct sockaddr*)&dns_addr, sizeof(dns_addr));
+    if (sent != query_len) {
+        trace("Failed to send DNS query: %s", strerror(errno));
+        close(sock);
+        return -1;
+    }
+
+    // Receive response
+    ssize_t recv_len = recv(sock, response_buf, sizeof(response_buf), 0);
+    close(sock);
+
+    if (recv_len < DNS_HEADER_SIZE) {
+        trace("DNS response too short or recv failed: %zd", recv_len);
+        return -1;
+    }
+
+    // Parse DNS response header
+    uint16_t resp_id = (response_buf[0] << 8) | response_buf[1];
+    uint16_t flags = (response_buf[2] << 8) | response_buf[3];
+    uint16_t qdcount = (response_buf[4] << 8) | response_buf[5];
+    uint16_t ancount = (response_buf[6] << 8) | response_buf[7];
+
+    // Verify response
+    if (resp_id != query_id) {
+        trace("DNS response ID mismatch: expected %u, got %u", query_id, resp_id);
+        return -1;
+    }
+    if (!(flags & DNS_FLAG_QR)) {
+        trace("DNS response is not a response (QR=0)");
+        return -1;
+    }
+    if ((flags & DNS_FLAG_RCODE_MASK) != 0) {
+        trace("DNS response error code: %u", flags & DNS_FLAG_RCODE_MASK);
+        return -1;
+    }
+    if (ancount == 0) {
+        trace("DNS response has no answers");
+        return 0;
+    }
+
+    // Skip question section
+    size_t offset = DNS_HEADER_SIZE;
+    for (int i = 0; i < qdcount; i++) {
+        int skip = _skip_dns_name(response_buf, recv_len, offset);
+        if (skip < 0) return -1;
+        offset += skip;
+        offset += 4;  // QTYPE + QCLASS
+        if (offset > (size_t)recv_len) return -1;
+    }
+
+    // Parse answer section
+    int addresses_added = 0;
+    for (int i = 0; i < ancount && offset < (size_t)recv_len; i++) {
+        // Skip NAME
+        int skip = _skip_dns_name(response_buf, recv_len, offset);
+        if (skip < 0) break;
+        offset += skip;
+
+        if (offset + 10 > (size_t)recv_len) break;  // Need TYPE, CLASS, TTL, RDLENGTH
+
+        uint16_t type = (response_buf[offset] << 8) | response_buf[offset + 1];
+        offset += 2;
+        uint16_t class = (response_buf[offset] << 8) | response_buf[offset + 1];
+        offset += 2;
+        offset += 4;  // Skip TTL
+        uint16_t rdlength = (response_buf[offset] << 8) | response_buf[offset + 1];
+        offset += 2;
+
+        if (offset + rdlength > (size_t)recv_len) break;
+
+        // Only process A records (IPv4)
+        if (type == DNS_TYPE_A && class == DNS_CLASS_IN && rdlength == 4) {
+            uint32_t addr;
+            memcpy(&addr, &response_buf[offset], 4);
+            _getaddrinfo_appendv4(head, tail, add_tcp, add_udp, add_raw, addr, port);
+            addresses_added++;
+            trace("DNS query for %s: got address %u.%u.%u.%u", node,
+                  response_buf[offset], response_buf[offset+1],
+                  response_buf[offset+2], response_buf[offset+3]);
+        }
+
+        offset += rdlength;
+    }
+
+    trace("DNS query for %s returned %d addresses", node, addresses_added);
+    return addresses_added;
+}
+
 int shimc_api_getaddrinfo(const char* node, const char* service, const struct addrinfo* hints,
                          struct addrinfo** res) {
     // Quoted text is from the man page.
@@ -408,29 +629,37 @@ int shimc_api_getaddrinfo(const char* node, const char* service, const struct ad
     // "node specifies either a  numerical network  address...or a network
     // hostname, whose network addresses are looked up and resolved."
     //
-    // On to name lookups. The `hosts` line in /etc/nsswitch.conf specifies the
-    // order in which to try lookups.  We just hard-code trying `files` first
-    // (and for now, only). For hosts lookups, the corresponding file is
-    // /etc/hosts. See NSSWITCH.CONF(5).
+    // Name lookup order:
+    // 1. Configured DNS server (if set) - takes precedence for simulation
+    // 2. Shadow's internal hostname database
+    // 3. /etc/hosts file
     if (add_ipv6) {
         // TODO: look for IPv6 addresses in /etc/hosts.
     }
     if (add_ipv4) {
-        // Try first to avoid scanning the /etc/hosts file.
-        uint32_t addr;
-        if (_shim_api_hostname_to_addr_ipv4(node, &addr)) {
-            // We got the address we needed.
-            _getaddrinfo_appendv4(res, &tail, add_tcp, add_udp, add_raw, addr, port);
-        } else {
-            // Fall back to scanning /etc/hosts.
-            warning("shadow_hostname_to_addr_ipv4 syscall failed for name %s, falling back to less "
-                    "efficient scan of '/etc/hosts' file.",
-                    node);
+        // First, try the configured DNS server if one is set.
+        // This takes precedence for simulation purposes.
+        uint32_t dns_server = shimshmem_getDnsServer(shim_hostSharedMem());
+        if (dns_server != 0) {
+            trace("Attempting DNS query for %s", node);
+            _getaddrinfo_dns_query_ipv4(res, &tail, node, add_tcp, add_udp, add_raw, port, dns_server);
+        }
+
+        // If DNS query didn't find anything, try Shadow's internal database.
+        if (*res == NULL) {
+            uint32_t addr;
+            if (_shim_api_hostname_to_addr_ipv4(node, &addr)) {
+                // We got the address we needed.
+                _getaddrinfo_appendv4(res, &tail, add_tcp, add_udp, add_raw, addr, port);
+            }
+        }
+
+        // Finally, fall back to scanning /etc/hosts.
+        if (*res == NULL) {
+            trace("Falling back to /etc/hosts scan for %s", node);
             _getaddrinfo_add_matching_hosts_ipv4(res, &tail, node, add_tcp, add_udp, add_raw, port);
         }
     }
-
-    // TODO: maybe do DNS lookup, if we end up supporting that in Shadow.
 
     if (*res == NULL) {
         // "EAI_NONAME: The node or service is not known"

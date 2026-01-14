@@ -617,6 +617,9 @@ impl<'a> Manager<'a> {
                 use_new_tcp: self.config.experimental.use_new_tcp.unwrap(),
                 use_mem_mapper: self.config.experimental.use_memory_manager.unwrap(),
                 use_syscall_counters: self.config.experimental.use_syscall_counters.unwrap(),
+                dns_server: self.config.network.dns_server
+                    .map(|ip| u32::from(ip).to_be())
+                    .unwrap_or(0),
             };
 
             Box::new(Host::new(

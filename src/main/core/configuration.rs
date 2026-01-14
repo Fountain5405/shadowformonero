@@ -323,6 +323,14 @@ pub struct NetworkOptions {
     #[clap(long, value_name = "bool")]
     #[clap(help = NETWORK_HELP.get("use_shortest_path").unwrap().as_str())]
     pub use_shortest_path: Option<bool>,
+
+    /// IP address of the DNS server for resolving unknown hostnames. When set,
+    /// getaddrinfo() will send UDP DNS queries to this address for hostnames
+    /// not found in Shadow's internal database or /etc/hosts.
+    #[serde(default)]
+    #[clap(long, value_name = "ip")]
+    #[clap(help = NETWORK_HELP.get("dns_server").unwrap().as_str())]
+    pub dns_server: Option<std::net::Ipv4Addr>,
 }
 
 impl NetworkOptions {

@@ -108,6 +108,10 @@ pub struct HostShmem {
     pub shim_log_level: logger::LogLevel,
 
     pub manager_shmem: ShMemBlockSerialized,
+
+    // DNS server IP address for resolving unknown hostnames via UDP queries.
+    // Stored as u32 in network byte order. 0 means not configured.
+    pub dns_server: u32,
 }
 assert_shmem_safe!(HostShmem, _hostshmem_test_fn);
 
@@ -123,6 +127,7 @@ impl HostShmem {
         tsc_hz: u64,
         shim_log_level: ::logger::LogLevel,
         manager_shmem: &ShMemBlock<ManagerShmem>,
+        dns_server: u32,
     ) -> Self {
         Self {
             host_id,
@@ -141,6 +146,7 @@ impl HostShmem {
             sim_time: AtomicEmulatedTime::new(EmulatedTime::MIN),
             shim_log_level,
             manager_shmem: manager_shmem.serialize(),
+            dns_server,
         }
     }
 
@@ -508,6 +514,20 @@ pub mod export {
     ) -> ::logger::LogLevel {
         let host_mem = unsafe { host_mem.as_ref().unwrap() };
         host_mem.shim_log_level
+    }
+
+    /// Get the DNS server IP address (in network byte order).
+    /// Returns 0 if no DNS server is configured.
+    ///
+    /// # Safety
+    ///
+    /// Pointer args must be safely dereferenceable.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C-unwind" fn shimshmem_getDnsServer(
+        host_mem: *const ShimShmemHost,
+    ) -> u32 {
+        let host_mem = unsafe { host_mem.as_ref().unwrap() };
+        host_mem.dns_server
     }
 
     /// # Safety
