@@ -173,17 +173,20 @@ impl NetworkInterface {
         let socket_opt = self.recv_sockets.borrow().get(&key).cloned();
 
         if let Some(socket) = socket_opt {
-            // If SO_REUSEADDR is set, check if the existing socket is closed
-            // This allows binding to an address where the previous socket has been closed
-            // (similar to binding over sockets in TIME_WAIT state)
-            if reuseaddr && socket.borrow().state().contains(FileState::CLOSED) {
+            // Always clean up closed sockets (lazy cleanup)
+            // This handles the case where a process terminated and the socket wasn't properly
+            // disassociated. We do this unconditionally because closed sockets should never
+            // block new bindings.
+            if socket.borrow().state().contains(FileState::CLOSED) {
                 log::debug!(
-                    "SO_REUSEADDR: Found closed socket for key {:?}, allowing rebind",
+                    "Found closed socket for key {:?}, cleaning up to allow rebind",
                     key
                 );
                 self.recv_sockets.borrow_mut().remove(&key);
                 return false;
             }
+            // reuseaddr parameter reserved for future use (e.g., allowing bind over TIME_WAIT)
+            let _ = reuseaddr;
             true
         } else {
             false
