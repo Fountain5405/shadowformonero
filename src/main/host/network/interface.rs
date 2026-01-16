@@ -159,7 +159,13 @@ impl NetworkInterface {
         }
     }
 
-    pub fn is_addr_in_use(&self, protocol: IanaProtocol, port: u16, peer: SocketAddrV4) -> bool {
+    pub fn is_addr_in_use(
+        &self,
+        protocol: IanaProtocol,
+        port: u16,
+        peer: SocketAddrV4,
+        reuseaddr: bool,
+    ) -> bool {
         let local = SocketAddrV4::new(self.addr, port);
         let key = AssociatedSocketKey::new(protocol, local, peer);
 
@@ -167,12 +173,12 @@ impl NetworkInterface {
         let socket_opt = self.recv_sockets.borrow().get(&key).cloned();
 
         if let Some(socket) = socket_opt {
-            // Check if the socket is closed - if so, clean it up (lazy cleanup)
-            // This handles the case where a process terminated and the socket wasn't properly
-            // disassociated, similar to SO_REUSEADDR behavior for ports in TIME_WAIT
-            if socket.borrow().state().contains(FileState::CLOSED) {
+            // If SO_REUSEADDR is set, check if the existing socket is closed
+            // This allows binding to an address where the previous socket has been closed
+            // (similar to binding over sockets in TIME_WAIT state)
+            if reuseaddr && socket.borrow().state().contains(FileState::CLOSED) {
                 log::debug!(
-                    "Found closed socket for key {:?}, cleaning up to allow rebind",
+                    "SO_REUSEADDR: Found closed socket for key {:?}, allowing rebind",
                     key
                 );
                 self.recv_sockets.borrow_mut().remove(&key);

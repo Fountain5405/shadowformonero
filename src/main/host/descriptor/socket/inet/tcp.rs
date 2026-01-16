@@ -42,6 +42,8 @@ pub struct TcpSocket {
     // should only be used by `OpenFile` to make sure there is only ever one `OpenFile` instance for
     // this file
     has_open_file: bool,
+    /// SO_REUSEADDR socket option - allows binding to address in TIME_WAIT state
+    reuseaddr: bool,
     _counter: ObjectCounter,
 }
 
@@ -67,6 +69,7 @@ impl TcpSocket {
                 connect_result_is_pending: false,
                 shutdown_status: None,
                 has_open_file: false,
+                reuseaddr: false,
                 _counter: ObjectCounter::new("TcpSocket"),
             })
         });
@@ -98,6 +101,11 @@ impl TcpSocket {
 
     pub fn supports_sa_restart(&self) -> bool {
         true
+    }
+
+    /// Check if SO_REUSEADDR is set on this socket
+    pub fn reuseaddr(&self) -> bool {
+        self.reuseaddr
     }
 
     pub fn set_has_open_file(&mut self, val: bool) {
@@ -356,11 +364,13 @@ impl TcpSocket {
         let peer_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
         // associate the socket
+        let reuseaddr = socket_ref.reuseaddr;
         let (_addr, handle) = inet::associate_socket(
             InetSocket::Tcp(Arc::clone(socket)),
             addr,
             peer_addr,
             /* check_generic_peer= */ true,
+            reuseaddr,
             net_ns,
             rng,
         )?;
@@ -567,11 +577,13 @@ impl TcpSocket {
                 let socket = Arc::clone(socket);
 
                 // associate the socket
+                let reuseaddr = socket.borrow().reuseaddr;
                 let (_addr, handle) = inet::associate_socket(
                     InetSocket::Tcp(Arc::clone(&socket)),
                     local_addr,
                     peer_addr,
                     /* check_generic_peer= */ true,
+                    reuseaddr,
                     net_ns,
                     rng,
                 )?;
@@ -676,11 +688,13 @@ impl TcpSocket {
                 // add a wildcard port number
                 let local_addr = SocketAddrV4::new(local_addr, 0);
 
+                let reuseaddr = socket.borrow().reuseaddr;
                 let (local_addr, handle) = inet::associate_socket(
                     InetSocket::Tcp(Arc::clone(socket)),
                     local_addr,
                     peer_addr,
                     /* check_generic_peer= */ true,
+                    reuseaddr,
                     net_ns,
                     rng,
                 )?;
@@ -779,6 +793,7 @@ impl TcpSocket {
                 connect_result_is_pending: false,
                 shutdown_status: None,
                 has_open_file: false,
+                reuseaddr: false,
                 _counter: ObjectCounter::new("TcpSocket"),
             })
         });
@@ -792,11 +807,13 @@ impl TcpSocket {
         // TODO: if the association fails, we lose the child socket
 
         // associate the socket
+        // For accepted sockets, use reuseaddr=false since this is a new connection
         let (_addr, handle) = inet::associate_socket(
             InetSocket::Tcp(Arc::clone(&new_socket)),
             local_addr,
             remote_addr,
             /* check_generic_peer= */ false,
+            /* reuseaddr= */ false,
             net_ns,
             rng,
         )?;
@@ -948,8 +965,17 @@ impl TcpSocket {
     ) -> Result<(), SyscallError> {
         match (level, optname) {
             (libc::SOL_SOCKET, libc::SO_REUSEADDR) => {
-                // TODO: implement this, tor and tgen use it
-                log::trace!("setsockopt SO_REUSEADDR not yet implemented");
+                type OptType = libc::c_int;
+
+                if usize::try_from(optlen).unwrap() < std::mem::size_of::<OptType>() {
+                    return Err(Errno::EINVAL.into());
+                }
+
+                let optval_ptr = optval_ptr.cast::<OptType>();
+                let val = mem.read(optval_ptr)?;
+
+                self.reuseaddr = val != 0;
+                log::trace!("setsockopt SO_REUSEADDR set to {}", self.reuseaddr);
             }
             (libc::SOL_SOCKET, libc::SO_REUSEPORT) => {
                 // TODO: implement this, tgen uses it

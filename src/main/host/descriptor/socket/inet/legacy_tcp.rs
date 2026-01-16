@@ -37,6 +37,8 @@ pub struct LegacyTcpSocket {
     has_open_file: bool,
     /// Did the last connect() call block, and if so what thread?
     thread_of_blocked_connect: Option<ThreadId>,
+    /// SO_REUSEADDR socket option - allows binding to address in TIME_WAIT state
+    reuseaddr: bool,
     _counter: ObjectCounter,
 }
 
@@ -65,6 +67,7 @@ impl LegacyTcpSocket {
             socket: HostTreePointer::new(legacy_tcp),
             has_open_file: false,
             thread_of_blocked_connect: None,
+            reuseaddr: false,
             _counter: ObjectCounter::new("LegacyTcpSocket"),
         };
 
@@ -81,6 +84,11 @@ impl LegacyTcpSocket {
     /// rust socket and legacy socket have the same handle.
     pub fn canonical_handle(&self) -> usize {
         self.as_legacy_tcp() as usize
+    }
+
+    /// Check if SO_REUSEADDR is set on this socket
+    pub fn reuseaddr(&self) -> bool {
+        self.reuseaddr
     }
 
     /// Get the [`c::TCP`] pointer.
@@ -277,12 +285,16 @@ impl LegacyTcpSocket {
         // this will allow us to receive packets from any peer
         let peer_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
+        // get reuseaddr before associate_socket (which may borrow again)
+        let reuseaddr = socket.borrow().reuseaddr();
+
         // associate the socket
         let (addr, handle) = inet::associate_socket(
             InetSocket::LegacyTcp(Arc::clone(socket)),
             addr,
             peer_addr,
             /* check_generic_peer= */ true,
+            reuseaddr,
             net_ns,
             rng,
         )?;
@@ -666,12 +678,16 @@ impl LegacyTcpSocket {
             // this will allow us to receive packets from any peer address
             let peer_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
+            // get reuseaddr from existing borrow
+            let reuseaddr = socket_ref.reuseaddr();
+
             // associate the socket
             let (local_addr, handle) = super::associate_socket(
                 super::InetSocket::LegacyTcp(socket.clone()),
                 local_addr,
                 peer_addr,
                 /* check_generic_peer= */ true,
+                reuseaddr,
                 net_ns,
                 rng,
             )?;
@@ -777,11 +793,13 @@ impl LegacyTcpSocket {
             };
 
             // associate the socket
+            let reuseaddr = socket_ref.reuseaddr();
             let (local_addr, handle) = super::associate_socket(
                 super::InetSocket::LegacyTcp(socket.clone()),
                 local_addr,
                 peer_addr,
                 /* check_generic_peer= */ true,
+                reuseaddr,
                 net_ns,
                 rng,
             )?;
@@ -1258,8 +1276,17 @@ impl LegacyTcpSocket {
                 unsafe { c::tcp_disableReceiveBufferAutotuning(self.as_legacy_tcp()) };
             }
             (libc::SOL_SOCKET, libc::SO_REUSEADDR) => {
-                // TODO: implement this, tor and tgen use it
-                log::trace!("setsockopt SO_REUSEADDR not yet implemented");
+                type OptType = libc::c_int;
+
+                if usize::try_from(optlen).unwrap() < std::mem::size_of::<OptType>() {
+                    return Err(Errno::EINVAL.into());
+                }
+
+                let optval_ptr = optval_ptr.cast::<OptType>();
+                let val = memory_manager.read(optval_ptr)?;
+
+                self.reuseaddr = val != 0;
+                log::trace!("setsockopt SO_REUSEADDR set to {}", self.reuseaddr);
             }
             (libc::SOL_SOCKET, libc::SO_REUSEPORT) => {
                 // TODO: implement this, tgen uses it
