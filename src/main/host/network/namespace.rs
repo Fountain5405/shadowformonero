@@ -112,19 +112,20 @@ impl NetworkNamespace {
         protocol_type: IanaProtocol,
         src: SocketAddrV4,
         dst: SocketAddrV4,
+        reuseaddr: bool,
     ) -> Result<bool, NoInterface> {
         if src.ip().is_unspecified() {
             Ok(self
                 .localhost
                 .borrow()
-                .is_addr_in_use(protocol_type, src.port(), dst)
+                .is_addr_in_use(protocol_type, src.port(), dst, reuseaddr)
                 || self
                     .internet
                     .borrow()
-                    .is_addr_in_use(protocol_type, src.port(), dst))
+                    .is_addr_in_use(protocol_type, src.port(), dst, reuseaddr))
         } else {
             match self.interface_borrow(*src.ip()) {
-                Some(i) => Ok(i.is_addr_in_use(protocol_type, src.port(), dst)),
+                Some(i) => Ok(i.is_addr_in_use(protocol_type, src.port(), dst, reuseaddr)),
                 None => Err(NoInterface),
             }
         }
@@ -149,11 +150,13 @@ impl NetworkNamespace {
             let random_port = rng.random_range(MIN_RANDOM_PORT..=u16::MAX);
 
             // `is_addr_in_use` will check all interfaces in the case of INADDR_ANY
+            // Use reuseaddr=false for ephemeral port allocation (we want a truly free port)
             let specific_in_use = self
                 .is_addr_in_use(
                     protocol_type,
                     SocketAddrV4::new(interface_ip, random_port),
                     peer,
+                    false,
                 )
                 .unwrap_or(true);
             let generic_in_use = self
@@ -161,6 +164,7 @@ impl NetworkNamespace {
                     protocol_type,
                     SocketAddrV4::new(interface_ip, random_port),
                     SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+                    false,
                 )
                 .unwrap_or(true);
             if !specific_in_use && !generic_in_use {
@@ -174,13 +178,14 @@ impl NetworkNamespace {
         let start = rng.random_range(MIN_RANDOM_PORT..=u16::MAX);
         for port in (start..=u16::MAX).chain(MIN_RANDOM_PORT..start) {
             let specific_in_use = self
-                .is_addr_in_use(protocol_type, SocketAddrV4::new(interface_ip, port), peer)
+                .is_addr_in_use(protocol_type, SocketAddrV4::new(interface_ip, port), peer, false)
                 .unwrap_or(true);
             let generic_in_use = self
                 .is_addr_in_use(
                     protocol_type,
                     SocketAddrV4::new(interface_ip, port),
                     SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+                    false,
                 )
                 .unwrap_or(true);
             if !specific_in_use && !generic_in_use {

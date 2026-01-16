@@ -50,6 +50,8 @@ pub struct UdpSocket {
     // should only be used by `OpenFile` to make sure there is only ever one `OpenFile` instance for
     // this file
     has_open_file: bool,
+    /// SO_REUSEADDR socket option - allows binding to address in TIME_WAIT state
+    reuseaddr: bool,
     _counter: ObjectCounter,
 }
 
@@ -71,6 +73,7 @@ impl UdpSocket {
             association: None,
             recv_time_of_last_read_packet: None,
             has_open_file: false,
+            reuseaddr: false,
             _counter: ObjectCounter::new("UdpSocket"),
         };
 
@@ -91,6 +94,11 @@ impl UdpSocket {
 
     pub fn mode(&self) -> FileMode {
         FileMode::READ | FileMode::WRITE
+    }
+
+    /// Check if SO_REUSEADDR is set on this socket
+    pub fn reuseaddr(&self) -> bool {
+        self.reuseaddr
     }
 
     pub fn has_open_file(&self) -> bool {
@@ -271,11 +279,13 @@ impl UdpSocket {
         let unspecified_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
         // associate the socket
+        let reuseaddr = socket.borrow().reuseaddr;
         let (addr, handle) = inet::associate_socket(
             InetSocket::Udp(Arc::clone(socket)),
             addr,
             unspecified_addr,
             /* check_generic_peer= */ true,
+            reuseaddr,
             net_ns,
             rng,
         )?;
@@ -397,11 +407,13 @@ impl UdpSocket {
             // this will allow us to receive packets from any peer
             let unspecified_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
+            let reuseaddr = socket_ref.reuseaddr;
             let (local_addr, handle) = super::associate_socket(
                 InetSocket::Udp(Arc::clone(socket)),
                 local_addr,
                 unspecified_addr,
                 /* check_generic_peer= */ true,
+                reuseaddr,
                 net_ns,
                 rng,
             )?;
@@ -749,11 +761,13 @@ impl UdpSocket {
                 // `push_in_packet` should drop any packets that aren't from the peer
                 let unspecified_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
 
+                let reuseaddr = socket_ref.reuseaddr;
                 let (local_addr, handle) = super::associate_socket(
                     InetSocket::Udp(Arc::clone(socket)),
                     local_addr,
                     unspecified_addr,
                     /* check_generic_peer= */ true,
+                    reuseaddr,
                     net_ns,
                     rng,
                 )?;
@@ -956,9 +970,17 @@ impl UdpSocket {
                     .set_soft_limit_bytes(val.try_into().unwrap());
             }
             (libc::SOL_SOCKET, libc::SO_REUSEADDR) => {
-                // TODO: implement this
-                warn_once_then_debug!("setsockopt SO_REUSEADDR not yet implemented for udp");
-                return Err(Errno::ENOPROTOOPT.into());
+                type OptType = libc::c_int;
+
+                if usize::try_from(optlen).unwrap() < std::mem::size_of::<OptType>() {
+                    return Err(Errno::EINVAL.into());
+                }
+
+                let optval_ptr = optval_ptr.cast::<OptType>();
+                let val = mem.read(optval_ptr)?;
+
+                self.reuseaddr = val != 0;
+                log::trace!("setsockopt SO_REUSEADDR set to {}", self.reuseaddr);
             }
             (libc::SOL_SOCKET, libc::SO_REUSEPORT) => {
                 // TODO: implement this

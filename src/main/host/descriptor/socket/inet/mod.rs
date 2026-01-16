@@ -277,6 +277,13 @@ impl InetSocketRef<'_> {
     );
 }
 
+// socket options
+impl InetSocketRef<'_> {
+    enum_passthrough!(self, (), LegacyTcp, Tcp, Udp;
+        pub fn reuseaddr(&self) -> bool
+    );
+}
+
 // socket-specific functions
 impl InetSocketRef<'_> {
     pub fn getpeername(&self) -> Result<Option<SockaddrStorage>, Errno> {
@@ -493,11 +500,14 @@ impl InetSocketWeak {
 /// socket will be automatically disassociated when the returned [`AssociationHandle`] is dropped.
 /// If `check_generic_peer` is true, the association will also fail if there is already a socket
 /// associated with the local address `local_addr` and peer address 0.0.0.0:0.
+/// The `reuseaddr` parameter indicates if SO_REUSEADDR is set on the socket (must be passed
+/// by caller since the socket may already be borrowed).
 fn associate_socket(
     socket: InetSocket,
     local_addr: SocketAddrV4,
     peer_addr: SocketAddrV4,
     check_generic_peer: bool,
+    reuseaddr: bool,
     net_ns: &NetworkNamespace,
     rng: impl rand::Rng,
 ) -> Result<(SocketAddrV4, AssociationHandle), Errno> {
@@ -535,7 +545,7 @@ fn associate_socket(
     };
 
     // make sure the port is available at this address for this protocol
-    match net_ns.is_addr_in_use(protocol, local_addr, peer_addr) {
+    match net_ns.is_addr_in_use(protocol, local_addr, peer_addr, reuseaddr) {
         Ok(true) => {
             log::debug!(
                 "The provided addresses (local={local_addr}, peer={peer_addr}) are not available"
@@ -551,6 +561,7 @@ fn associate_socket(
             protocol,
             local_addr,
             SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+            reuseaddr,
         ) {
             Ok(true) => {
                 log::debug!(
