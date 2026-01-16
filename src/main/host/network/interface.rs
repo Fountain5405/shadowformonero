@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use crate::core::configuration::QDiscMode;
 use crate::core::worker::Worker;
+use crate::host::descriptor::FileState;
 use crate::host::descriptor::socket::inet::InetSocket;
 use crate::host::network::queuing::{NetworkQueue, NetworkQueueKind};
 use crate::network::PacketDevice;
@@ -161,7 +162,26 @@ impl NetworkInterface {
     pub fn is_addr_in_use(&self, protocol: IanaProtocol, port: u16, peer: SocketAddrV4) -> bool {
         let local = SocketAddrV4::new(self.addr, port);
         let key = AssociatedSocketKey::new(protocol, local, peer);
-        self.recv_sockets.borrow().contains_key(&key)
+
+        // Check if the socket exists
+        let socket_opt = self.recv_sockets.borrow().get(&key).cloned();
+
+        if let Some(socket) = socket_opt {
+            // Check if the socket is closed - if so, clean it up (lazy cleanup)
+            // This handles the case where a process terminated and the socket wasn't properly
+            // disassociated, similar to SO_REUSEADDR behavior for ports in TIME_WAIT
+            if socket.borrow().state().contains(FileState::CLOSED) {
+                log::debug!(
+                    "Found closed socket for key {:?}, cleaning up to allow rebind",
+                    key
+                );
+                self.recv_sockets.borrow_mut().remove(&key);
+                return false;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     // Add the socket to the list of sockets that have data ready for us to send out to the network.
