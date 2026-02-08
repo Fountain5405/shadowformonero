@@ -1118,11 +1118,96 @@ impl SyscallHandler {
         vlen: std::ffi::c_uint,
         flags: std::ffi::c_int,
     ) -> Result<std::ffi::c_int, SyscallError> {
-        log::trace!("sendmmsg called with fd={}, vlen={}, flags={}", fd, vlen, flags);
-        
-        // For simulation purposes, we'll just return success
-        // In a real implementation, this would send multiple messages
-        // For now, we'll return the number of messages that would have been sent
-        Ok(vlen as std::ffi::c_int)
+        // Cap vlen to UIO_MAXIOV (1024) per Linux kernel behavior
+        let vlen = std::cmp::min(vlen as usize, 1024);
+
+        // if we were previously blocked, get the active file from the last syscall handler
+        // invocation since it may no longer exist in the descriptor table
+        let file = ctx
+            .objs
+            .thread
+            .syscall_condition()
+            // if this was for a C descriptor, then there won't be an active file object
+            .and_then(|x| x.active_file().cloned());
+
+        let file = match file {
+            // we were previously blocked, so re-use the file from the previous syscall invocation
+            Some(x) => x,
+            // get the file from the descriptor table, or return early if it doesn't exist
+            None => {
+                let desc_table = ctx.objs.thread.descriptor_table_borrow(ctx.objs.host);
+                match Self::get_descriptor(&desc_table, fd)?.file() {
+                    CompatFile::New(file) => file.clone(),
+                    CompatFile::Legacy(_file) => {
+                        return Err(Errno::ENOTSOCK.into());
+                    }
+                }
+            }
+        };
+
+        let File::Socket(socket) = file.inner_file() else {
+            return Err(Errno::ENOTSOCK.into());
+        };
+
+        let mut sent_count: std::ffi::c_int = 0;
+
+        for i in 0..vlen {
+            // msg_hdr is at offset 0 within mmsghdr, so we can cast directly
+            let msg_hdr_ptr = msgvec_ptr.add(i).cast::<libc::msghdr>();
+
+            let mut mem = ctx.objs.process.memory_borrow_mut();
+            let mut rng = ctx.objs.host.random_mut();
+            let net_ns = ctx.objs.host.network_namespace_borrow();
+
+            let msg = match io::read_msghdr(&mem, msg_hdr_ptr) {
+                Ok(m) => m,
+                Err(e) => {
+                    return if sent_count > 0 { Ok(sent_count) } else { Err(e.into()) };
+                }
+            };
+
+            let addr = match io::read_sockaddr(&mem, msg.name, msg.name_len) {
+                Ok(a) => a,
+                Err(e) => {
+                    return if sent_count > 0 { Ok(sent_count) } else { Err(e.into()) };
+                }
+            };
+
+            let args = SendmsgArgs {
+                addr,
+                iovs: &msg.iovs,
+                control_ptr: ForeignArrayPtr::new(msg.control, msg.control_len),
+                // note: "the msg_flags field is ignored" for sendmsg; see send(2)
+                flags,
+            };
+
+            // call the socket's sendmsg(), and run any resulting events
+            let mut result = CallbackQueue::queue_and_run_with_legacy(|cb_queue| {
+                Socket::sendmsg(socket, args, &mut mem, &net_ns, &mut *rng, cb_queue)
+            });
+
+            match result {
+                Ok(bytes_sent) => {
+                    // Update msg_len in the mmsghdr in plugin memory
+                    let mmsghdr_ptr = msgvec_ptr.add(i);
+                    let mut mmsghdr_val: libc::mmsghdr = mem.read(mmsghdr_ptr)?;
+                    mmsghdr_val.msg_len = bytes_sent as std::ffi::c_uint;
+                    mem.write(mmsghdr_ptr, &mmsghdr_val)?;
+                    sent_count += 1;
+                }
+                Err(mut err) => {
+                    if sent_count > 0 {
+                        return Ok(sent_count);
+                    }
+                    // First message failed, propagate error (including blocking)
+                    if let Some(cond) = err.blocked_condition() {
+                        cond.set_active_file(file.clone());
+                    }
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(sent_count)
     }
 }
