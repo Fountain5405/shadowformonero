@@ -349,7 +349,37 @@ static int _skip_dns_name(const uint8_t* buf, size_t buf_size, size_t offset) {
     return -1;  // Ran off end of buffer
 }
 
-// Perform a DNS query for A records and add results to the addrinfo list.
+// Helper to send all bytes on a stream socket.
+// Returns 0 on success, -1 on error.
+static int _send_all(int sock, const uint8_t* buf, size_t len) {
+    size_t total_sent = 0;
+    while (total_sent < len) {
+        ssize_t sent = send(sock, buf + total_sent, len - total_sent, 0);
+        if (sent <= 0) {
+            return -1;
+        }
+        total_sent += sent;
+    }
+    return 0;
+}
+
+// Helper to receive exactly `len` bytes from a stream socket.
+// Returns 0 on success, -1 on error/timeout.
+static int _recv_all(int sock, uint8_t* buf, size_t len) {
+    size_t total_recv = 0;
+    while (total_recv < len) {
+        ssize_t r = recv(sock, buf + total_recv, len - total_recv, 0);
+        if (r <= 0) {
+            return -1;
+        }
+        total_recv += r;
+    }
+    return 0;
+}
+
+// Perform a DNS query for A records over TCP and add results to the addrinfo list.
+// Uses TCP DNS framing per RFC 1035 Section 4.2.2: each message is prefixed with
+// a 2-byte big-endian length field.
 // Returns the number of addresses added, or -1 on error.
 static int _getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo** tail,
                                        const char* node, bool add_tcp, bool add_udp,
@@ -359,7 +389,8 @@ static int _getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo**
     }
 
     uint8_t query_buf[DNS_MAX_PACKET_SIZE];
-    uint8_t response_buf[DNS_MAX_PACKET_SIZE];
+    // TCP DNS response can be up to 65535 bytes; use a larger buffer
+    uint8_t response_buf[DNS_MAX_PACKET_SIZE * 2];
 
     // Generate a simple query ID (doesn't need to be cryptographically random)
     uint16_t query_id = (uint16_t)(((uintptr_t)node ^ (uintptr_t)head) & 0xFFFF);
@@ -371,41 +402,73 @@ static int _getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo**
         return -1;
     }
 
-    // Create UDP socket
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    // Create TCP socket
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        trace("Failed to create UDP socket for DNS query: %s", strerror(errno));
+        trace("Failed to create TCP socket for DNS query: %s", strerror(errno));
         return -1;
     }
 
-    // Set socket timeout (2 seconds)
+    // Set socket timeout (2 seconds for both send and receive)
     struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    // Send query to DNS server
+    // Connect to DNS server
     struct sockaddr_in dns_addr = {
         .sin_family = AF_INET,
         .sin_port = htons(DNS_PORT),
         .sin_addr = {.s_addr = dns_server_ip}  // Already in network byte order
     };
 
-    trace("Sending DNS query for %s to DNS server", node);
-    ssize_t sent = sendto(sock, query_buf, query_len, 0,
-                          (struct sockaddr*)&dns_addr, sizeof(dns_addr));
-    if (sent != query_len) {
-        trace("Failed to send DNS query: %s", strerror(errno));
+    trace("Connecting to DNS server (TCP) for query %s", node);
+    if (connect(sock, (struct sockaddr*)&dns_addr, sizeof(dns_addr)) < 0) {
+        trace("Failed to connect to DNS server (TCP): %s", strerror(errno));
         close(sock);
         return -1;
     }
 
-    // Receive response
-    ssize_t recv_len = recv(sock, response_buf, sizeof(response_buf), 0);
-    close(sock);
+    // TCP DNS framing: send 2-byte big-endian length prefix, then the query
+    uint8_t len_prefix[2];
+    len_prefix[0] = (query_len >> 8) & 0xFF;
+    len_prefix[1] = query_len & 0xFF;
 
-    if (recv_len < DNS_HEADER_SIZE) {
-        trace("DNS response too short or recv failed: %zd", recv_len);
+    trace("Sending DNS query for %s to DNS server (TCP, %d bytes)", node, query_len);
+    if (_send_all(sock, len_prefix, 2) < 0) {
+        trace("Failed to send DNS query length prefix: %s", strerror(errno));
+        close(sock);
         return -1;
     }
+    if (_send_all(sock, query_buf, query_len) < 0) {
+        trace("Failed to send DNS query body: %s", strerror(errno));
+        close(sock);
+        return -1;
+    }
+
+    // Receive response: first read 2-byte length prefix
+    uint8_t resp_len_buf[2];
+    if (_recv_all(sock, resp_len_buf, 2) < 0) {
+        trace("Failed to receive DNS response length prefix: %s", strerror(errno));
+        close(sock);
+        return -1;
+    }
+    uint16_t resp_msg_len = (resp_len_buf[0] << 8) | resp_len_buf[1];
+
+    if (resp_msg_len < DNS_HEADER_SIZE || resp_msg_len > sizeof(response_buf)) {
+        trace("DNS response length invalid: %u", resp_msg_len);
+        close(sock);
+        return -1;
+    }
+
+    // Read the DNS response message
+    if (_recv_all(sock, response_buf, resp_msg_len) < 0) {
+        trace("Failed to receive DNS response body: %s", strerror(errno));
+        close(sock);
+        return -1;
+    }
+    close(sock);
+
+    ssize_t recv_len = resp_msg_len;
 
     // Parse DNS response header
     uint16_t resp_id = (response_buf[0] << 8) | response_buf[1];
@@ -475,7 +538,7 @@ static int _getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo**
         offset += rdlength;
     }
 
-    trace("DNS query for %s returned %d addresses", node, addresses_added);
+    trace("DNS query (TCP) for %s returned %d addresses", node, addresses_added);
     return addresses_added;
 }
 
