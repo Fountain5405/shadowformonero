@@ -578,8 +578,13 @@ int ub_resolve(struct ub_ctx* ctx, const char* name, int rrtype,
         return UB_NOERROR;
     }
 
-    debug("DNS shim: ub_resolve for %s: rcode=%d havedata=%d",
-          name, res->rcode, res->havedata);
+    /* Simulate valid DNSSEC so Monero's checkpoint code accepts the records.
+     * Monero checks: dnssec_available = (secure || bogus), dnssec_valid = secure && !bogus.
+     * We set secure=1, bogus=0 to indicate a valid DNSSEC response. */
+    res->secure = 1;
+
+    debug("DNS shim: ub_resolve for %s: rcode=%d havedata=%d secure=%d",
+          name, res->rcode, res->havedata, res->secure);
 
     return UB_NOERROR;
 }
