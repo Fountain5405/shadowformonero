@@ -1,3 +1,34 @@
+# shadowformonero
+
+> **This is a fork of [shadow/shadow](https://github.com/shadow/shadow)
+> maintained for [monerosim](https://github.com/Fountain5405/monerosim).**
+> It carries patches that upstream Shadow does not (yet) include, needed
+> to run real `monerod` and `monero-wallet-rpc` binaries inside Shadow's
+> simulated network with deterministic behavior. Most users should be
+> arriving here via `monerosim`'s `setup.sh`, which clones a pinned tag
+> (currently `v0.1.0`); that's the supported entry point. The rest of
+> the README below is upstream Shadow's own README, unmodified.
+>
+> - **Branched from upstream Shadow at commit:** `d24c0e587` (2025-07-02)
+> - **Monerosim-fork tag tracking:** the fork is tagged in lock-step
+>   with monerosim releases (`v0.1.0`, future `v0.2.0`, …). Use the tag
+>   matching your monerosim version. `main` is the development branch.
+> - **What this fork changes:** ~18 patches across DNS, sockets, locked
+>   memory, missing syscalls, and RNG-construction-order — see
+>   [`CHANGELOG-monerosim-fork.md`](CHANGELOG-monerosim-fork.md) for the
+>   itemized list with rationale.
+> - **Upstreaming:** the non-Monero-specific fixes (DNSSEC flag,
+>   `sendmmsg` syscall handler, `SO_REUSEADDR`, `TCP_NODELAY` disable,
+>   etc.) are candidates for upstream submission; the Monero-specific
+>   bits (mlock-family for `monerod`'s secret-key pages, constructor
+>   priority for the deterministic RNG interposer) are fork-only.
+> - **Report monerosim-related issues** at the
+>   [monerosim issue tracker](https://github.com/Fountain5405/monerosim/issues),
+>   not the upstream Shadow tracker. Issues unrelated to the patches in
+>   this fork should go to [shadow/shadow](https://github.com/shadow/shadow).
+
+---
+
 # The Shadow Simulator
 
 ## Quickstart
