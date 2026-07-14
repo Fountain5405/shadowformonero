@@ -1028,6 +1028,8 @@ impl LegacyTcpSocket {
                 debug_assert_ne!(!child_local_addr.port(), 0);
             }
 
+            // get reuseaddr before associate_socket (which may borrow again)
+            let reuseaddr = new_socket.borrow().reuseaddr();
             let (_addr, handle) = inet::associate_socket(
                 InetSocket::LegacyTcp(Arc::clone(new_socket)),
                 SocketAddrV4::from(child_local_addr),
@@ -1036,6 +1038,7 @@ impl LegacyTcpSocket {
                  * with a missing/generic peer. */
                 /* check_generic_peer= */
                 false,
+                reuseaddr,
                 net_ns,
                 rng,
             )?;
