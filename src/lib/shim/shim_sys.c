@@ -10,9 +10,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/param.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <time.h>
@@ -23,35 +20,6 @@
 #include "lib/shim/shim.h"
 #include "lib/shim/shim_api.h"
 #include "lib/shim/shim_sys.h"
-
-
-// Syscall numbers for socket operations
-#define SYS_SOCKET 41
-#define SYS_CONNECT 42
-
-// Helper function to check if an address is localhost
-static bool is_localhost_addr(const struct sockaddr* addr) {
-    if (addr == NULL) {
-        return false;
-    }
-    
-    switch (addr->sa_family) {
-        case AF_INET: {
-            const struct sockaddr_in* in_addr = (const struct sockaddr_in*)addr;
-            uint32_t ip = ntohl(in_addr->sin_addr.s_addr);
-            // Check for 127.0.0.0/8 (localhost range)
-            return (ip & 0xFF000000) == 0x7F000000;
-        }
-        case AF_INET6: {
-            const struct sockaddr_in6* in6_addr = (const struct sockaddr_in6*)addr;
-            // Check for ::1 (IPv6 localhost)
-            struct in6_addr localhost = IN6ADDR_LOOPBACK_INIT;
-            return memcmp(&in6_addr->sin6_addr, &localhost, sizeof(struct in6_addr)) == 0;
-        }
-        default:
-            return false;
-    }
-}
 
 static CEmulatedTime _shim_sys_get_time() {
     const ShimShmemHost* mem = shim_hostSharedMem();
