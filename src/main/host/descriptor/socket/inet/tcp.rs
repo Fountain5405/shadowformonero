@@ -568,6 +568,9 @@ impl TcpSocket {
             socket_ref.with_tcp_state(cb_queue, |state| state.listen(backlog, associate_fn))
         } else {
             // if not associated, associate and return the handle
+            // get reuseaddr from the existing borrow (borrowing inside `associate_fn` would panic
+            // since `socket_ref` already holds a mutable borrow)
+            let reuseaddr = socket_ref.reuseaddr;
             let associate_fn = || {
                 // implicitly bind to all interfaces
                 let local_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
@@ -575,9 +578,6 @@ impl TcpSocket {
                 // want to receive packets from any address
                 let peer_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
                 let socket = Arc::clone(socket);
-
-                // associate the socket
-                let reuseaddr = socket.borrow().reuseaddr;
                 let (_addr, handle) = inet::associate_socket(
                     InetSocket::Tcp(Arc::clone(&socket)),
                     local_addr,
@@ -676,6 +676,9 @@ impl TcpSocket {
             socket_ref.with_tcp_state(cb_queue, |state| state.connect(peer_addr, associate_fn))
         } else {
             // if not associated, associate and return the handle
+            // get reuseaddr from the existing borrow (borrowing inside `associate_fn` would panic
+            // since `socket_ref` already holds a mutable borrow)
+            let reuseaddr = socket_ref.reuseaddr;
             let associate_fn = || {
                 // the local address needs to be a specific address (this is normally what a routing
                 // table would figure out for us)
@@ -687,8 +690,6 @@ impl TcpSocket {
 
                 // add a wildcard port number
                 let local_addr = SocketAddrV4::new(local_addr, 0);
-
-                let reuseaddr = socket.borrow().reuseaddr;
                 let (local_addr, handle) = inet::associate_socket(
                     InetSocket::Tcp(Arc::clone(socket)),
                     local_addr,
