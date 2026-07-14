@@ -205,9 +205,9 @@ impl SyscallHandler {
     ) -> Result<(), SyscallError> {
         // We don't need to check if the pointers are non-null since we don't
         // write to them if they are null.
-        let mut rgid_ptr = rgid_ptr.clone();
-        let mut egid_ptr = egid_ptr.clone();
-        let mut sgid_ptr = sgid_ptr.clone();
+        let rgid_ptr = rgid_ptr.clone();
+        let egid_ptr = egid_ptr.clone();
+        let sgid_ptr = sgid_ptr.clone();
 
         let (rgid, egid, sgid) = ctx.objs.process.getresgid()?;
 

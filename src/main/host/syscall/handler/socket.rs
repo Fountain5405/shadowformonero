@@ -1179,7 +1179,7 @@ impl SyscallHandler {
             };
 
             // call the socket's sendmsg(), and run any resulting events
-            let mut result = CallbackQueue::queue_and_run_with_legacy(|cb_queue| {
+            let result = CallbackQueue::queue_and_run_with_legacy(|cb_queue| {
                 Socket::sendmsg(socket, args, &mut mem, &net_ns, &mut *rng, cb_queue)
             });
 
