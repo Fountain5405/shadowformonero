@@ -541,7 +541,20 @@ int ub_resolve(struct ub_ctx* ctx, const char* name, int rrtype,
     debug("DNS shim: ub_resolve(%p, \"%s\", type=%d, class=%d)",
           (void*)ctx, name ? name : "(null)", rrtype, rrclass);
 
-    if (!ctx || !name || !result) {
+    if (!result) {
+        return UB_SYNTAX;
+    }
+
+    /* Real libunbound sets *result to NULL before doing anything else, and
+     * callers depend on it: monerod's DNSResolver::get_record declares an
+     * uninitialized `ub_result*` and registers a scope-exit that
+     * unconditionally calls ub_resolve_free(result), so leaving *result
+     * untouched on an early-error return makes it free uninitialized stack
+     * garbage (heap corruption / crash). Keep *result NULL on every error
+     * path below that returns before the result is allocated. */
+    *result = NULL;
+
+    if (!ctx || !name) {
         return UB_SYNTAX;
     }
 

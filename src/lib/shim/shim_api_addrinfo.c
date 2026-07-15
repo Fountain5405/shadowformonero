@@ -381,9 +381,16 @@ static int _recv_all(int sock, uint8_t* buf, size_t len) {
 // Uses TCP DNS framing per RFC 1035 Section 4.2.2: each message is prefixed with
 // a 2-byte big-endian length field.
 // Returns the number of addresses added, or -1 on error.
-static int _getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo** tail,
-                                       const char* node, bool add_tcp, bool add_udp,
-                                       bool add_raw, in_port_t port, uint32_t dns_server_ip) {
+//
+// NOTE: currently unreferenced. This function is only correct if its
+// socket()/connect()/send()/recv() calls are interposed and routed through the
+// simulated network, but shimc_api_getaddrinfo runs in ExecutionContext::Shadow
+// where those syscalls execute natively; see the note in shimc_api_getaddrinfo
+// for why the call site is disabled.
+__attribute__((unused)) static int
+_getaddrinfo_dns_query_ipv4(struct addrinfo** head, struct addrinfo** tail,
+                            const char* node, bool add_tcp, bool add_udp,
+                            bool add_raw, in_port_t port, uint32_t dns_server_ip) {
     if (dns_server_ip == 0) {
         return 0;  // No DNS server configured
     }
@@ -693,22 +700,31 @@ int shimc_api_getaddrinfo(const char* node, const char* service, const struct ad
     // hostname, whose network addresses are looked up and resolved."
     //
     // Name lookup order:
-    // 1. Configured DNS server (if set) - takes precedence for simulation
-    // 2. Shadow's internal hostname database
-    // 3. /etc/hosts file
+    // 1. Shadow's internal hostname database
+    // 2. /etc/hosts file
     if (add_ipv6) {
         // TODO: look for IPv6 addresses in /etc/hosts.
     }
     if (add_ipv4) {
-        // First, try the configured DNS server if one is set.
-        // This takes precedence for simulation purposes.
-        uint32_t dns_server = shimshmem_getDnsServer(shim_hostSharedMem());
-        if (dns_server != 0) {
-            trace("Attempting DNS query for %s", node);
-            _getaddrinfo_dns_query_ipv4(res, &tail, node, add_tcp, add_udp, add_raw, port, dns_server);
-        }
+        // NOTE: A query to the configured DNS server (--dns-server) used to be
+        // attempted first here via _getaddrinfo_dns_query_ipv4, but it is
+        // intentionally disabled. This function runs in
+        // ExecutionContext::Shadow (see shim_api_getaddrinfo in
+        // src/lib/shim/src/lib.rs), where syscalls that aren't Shadow-specific
+        // execute natively (see shim_syscallv in shim_syscall.c). The query's
+        // socket()/connect()/send()/recv() therefore escaped the simulation:
+        // they opened a real host TCP connection toward the *simulated* DNS
+        // server address, leaking SYN packets onto the real network and
+        // stalling the worker for up to 2 seconds of wall-clock time per
+        // lookup before failing. The query could never reach the simulated DNS
+        // server, so every lookup already fell through to Shadow's internal
+        // hostname database below; going straight to that fallback is
+        // behavior-preserving. To make --dns-server functional in-sim, the
+        // query would have to be made with interposed syscalls instead (e.g.
+        // run it in ExecutionContext::Application like shim_api_getifaddrs,
+        // after confirming the simulated DNS server serves TCP on port 53).
 
-        // If DNS query didn't find anything, try Shadow's internal database.
+        // Try Shadow's internal database.
         if (*res == NULL) {
             uint32_t addr;
             if (_shim_api_hostname_to_addr_ipv4(node, &addr)) {
