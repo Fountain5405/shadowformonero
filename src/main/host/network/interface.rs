@@ -67,6 +67,9 @@ pub struct NetworkInterface {
     /// Used to prevent recursion during cleanup.
     // TODO: remove when the legacy stack is removed.
     cleanup_in_progress: RefCell<bool>,
+    /// Inbound TCP ports on which to drop new connections (SYN packets),
+    /// simulating a host-level firewall / NAT without port forwarding.
+    blocked_inbound_ports: Vec<u16>,
     // Declared last so we only count deallocation as successful after the above are dropped.
     _counter: ObjectCounter,
 }
@@ -80,6 +83,7 @@ impl NetworkInterface {
         addr: Ipv4Addr,
         pcap_options: Option<PcapOptions>,
         qdisc: QDiscMode,
+        blocked_inbound_ports: Vec<u16>,
     ) -> Self {
         // Try to set up the pcap writer if configured.
         let pcap = pcap_options.and_then(|opt| match setup_pcap_writer(name, &opt) {
@@ -112,6 +116,7 @@ impl NetworkInterface {
             recv_sockets: RefCell::new(HashMap::new()),
             pcap: RefCell::new(pcap),
             cleanup_in_progress: RefCell::new(false),
+            blocked_inbound_ports,
             _counter: ObjectCounter::new("NetworkInterface"),
         }
     }
@@ -292,6 +297,20 @@ impl PacketDevice for NetworkInterface {
         // Record the packet before we process it, otherwise we may send more packets before we
         // record this one and the order will be incorrect.
         self.capture_if_configured(&packet);
+
+        // Host inbound firewall: drop NEW inbound TCP connections (SYN, no
+        // ACK) to blocked ports — models NAT / firewall without port
+        // forwarding. Established connections and the return traffic of this
+        // host's own outbound connections carry ACK, so they pass through; the
+        // remote dialer just gets no response and times out (a DROP, not RST).
+        if !self.blocked_inbound_ports.is_empty() {
+            if let Some(dst_port) = packet.tcp_syn_dst_port() {
+                if self.blocked_inbound_ports.contains(&dst_port) {
+                    packet.add_status(PacketStatus::RcvInterfaceDropped);
+                    return;
+                }
+            }
+        }
 
         // Find the socket that should process the packet.
         let protocol = packet.iana_protocol();

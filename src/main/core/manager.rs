@@ -627,6 +627,7 @@ impl<'a> Manager<'a> {
                     // the config only allows ipv4 addresses, so this shouldn't happen
                     std::net::IpAddr::V6(_) => unreachable!("IPv6 not supported"),
                 },
+                blocked_inbound_ports: host_info.blocked_inbound_ports.clone(),
                 sim_end_time: self.end_time,
                 requested_bw_down_bits: host_info.bandwidth_down_bits.unwrap(),
                 requested_bw_up_bits: host_info.bandwidth_up_bits.unwrap(),

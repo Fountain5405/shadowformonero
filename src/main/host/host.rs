@@ -58,6 +58,7 @@ pub struct HostParameters {
     pub hostname: CString,
     pub node_id: u32,
     pub ip_addr: libc::in_addr_t,
+    pub blocked_inbound_ports: Vec<u16>,
     pub sim_end_time: EmulatedTime,
     pub requested_bw_down_bits: u64,
     pub requested_bw_up_bits: u64,
@@ -264,7 +265,12 @@ impl Host {
             capture_size_bytes: x.capture_size.try_into().unwrap(),
         });
 
-        let net_ns = NetworkNamespace::new(public_ip, pcap_options, params.qdisc);
+        let net_ns = NetworkNamespace::new(
+            public_ip,
+            pcap_options,
+            params.qdisc,
+            params.blocked_inbound_ports.clone(),
+        );
 
         // Packets that are not for localhost or our public ip go to the router.
         // Use `Ipv4Addr::UNSPECIFIED` for the router to encode this for our

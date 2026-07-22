@@ -36,10 +36,16 @@ pub struct NetworkNamespace {
 }
 
 impl NetworkNamespace {
-    pub fn new(public_ip: Ipv4Addr, pcap: Option<PcapOptions>, qdisc: QDiscMode) -> Self {
-        let localhost = NetworkInterface::new("lo", Ipv4Addr::LOCALHOST, pcap.clone(), qdisc);
+    pub fn new(
+        public_ip: Ipv4Addr,
+        pcap: Option<PcapOptions>,
+        qdisc: QDiscMode,
+        blocked_inbound_ports: Vec<u16>,
+    ) -> Self {
+        let localhost =
+            NetworkInterface::new("lo", Ipv4Addr::LOCALHOST, pcap.clone(), qdisc, Vec::new());
 
-        let internet = NetworkInterface::new("eth0", public_ip, pcap, qdisc);
+        let internet = NetworkInterface::new("eth0", public_ip, pcap, qdisc, blocked_inbound_ports);
 
         Self {
             unix: Arc::new(AtomicRefCell::new(AbstractUnixNamespace::new())),

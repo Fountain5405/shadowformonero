@@ -176,6 +176,7 @@ pub struct HostInfo {
     pub bandwidth_down_bits: Option<u64>,
     pub bandwidth_up_bits: Option<u64>,
     pub ip_addr: Option<std::net::IpAddr>,
+    pub blocked_inbound_ports: Vec<u16>,
     pub log_level: Option<LogLevel>,
     pub pcap_config: Option<PcapConfig>,
     pub send_buf_size: u64,
@@ -254,6 +255,7 @@ fn build_host(
             .map(|x| x.convert(units::SiPrefixUpper::Base).unwrap().value()),
 
         ip_addr: host.ip_addr.map(|x| x.into()),
+        blocked_inbound_ports: host.blocked_inbound_ports.clone(),
         log_level: host.host_options.log_level.flatten(),
         pcap_config: host
             .host_options

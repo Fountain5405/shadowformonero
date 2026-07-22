@@ -445,6 +445,25 @@ impl Packet {
         SocketAddrV4::new(addr, port)
     }
 
+    /// If this packet is a NEW inbound TCP connection request (SYN set, ACK
+    /// clear), return its destination port; otherwise `None`. Works for both
+    /// the legacy and new TCP stacks; UDP always returns `None`. Used by the
+    /// per-host inbound firewall to drop new inbound connections while leaving
+    /// established connections and outbound return traffic (which carry ACK)
+    /// untouched.
+    pub fn tcp_syn_dst_port(&self) -> Option<u16> {
+        let (flags, dst_port) = match &self.data {
+            Data::LegacyTcp(tcp_rc) => {
+                let tcp = tcp_rc.borrow();
+                (tcp.header.flags, tcp.header.dst_port)
+            }
+            Data::Tcp(tcp) => (tcp.header.flags, tcp.header.dst_port),
+            Data::Udp(_) => return None,
+        };
+        (flags.contains(tcp::TcpFlags::SYN) && !flags.contains(tcp::TcpFlags::ACK))
+            .then_some(dst_port)
+    }
+
     /// Returns the priority set at packet creation time.
     pub fn priority(&self) -> FifoPacketPriority {
         self.meta.priority
