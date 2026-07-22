@@ -34,6 +34,15 @@
 #define DNS_FLAG_RD 0x0100  /* Recursion Desired */
 #define DNS_FLAG_RCODE_MASK 0x000F
 
+/* Max compression-pointer follows when skipping a single DNS name. A name is
+ * <= 255 octets on the wire (RFC 1035 §2.3.4) = <= 127 labels, so skipping one
+ * can never legitimately require more pointer follows than this. A higher count
+ * means a pointer loop (a pointer targeting itself, or a cycle A->B->A) in a
+ * malformed or malicious response, which would otherwise spin _dns_skip_name
+ * forever and hang the host thread (and, since Shadow waits on the host, stall
+ * the whole simulation). */
+#define DNS_MAX_COMPRESSION_PTRS 128
+
 /* libunbound return codes (from unbound.h) */
 #define UB_NOERROR 0
 #define UB_SERVFAIL 3
@@ -157,6 +166,7 @@ static int _dns_skip_name(const uint8_t* buf, int buf_len, int offset) {
     int pos = offset;
     int jumped = 0;
     int consumed = 0;
+    int ptrs = 0;
 
     while (pos < buf_len) {
         uint8_t label_len = buf[pos];
@@ -172,6 +182,12 @@ static int _dns_skip_name(const uint8_t* buf, int buf_len, int offset) {
         if ((label_len & 0xC0) == 0xC0) {
             /* Compression pointer */
             if (pos + 1 >= buf_len) {
+                return -1;
+            }
+            if (++ptrs > DNS_MAX_COMPRESSION_PTRS) {
+                /* Pointer loop in a malformed/malicious response — bail out
+                 * instead of following pointers forever. */
+                warning("DNS shim: compression-pointer loop in response, aborting name skip");
                 return -1;
             }
             if (!jumped) {
